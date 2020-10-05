@@ -35,11 +35,13 @@ uint16_t raw_v[MAX_BAND][MAX_SAMPLES];
 int sample_count = 0;
 
 // [63hz, 160Hz, 400Hz, 1kHz, 2.5kHz, 6.25kHz, 16kHz]
-uint16_t expander_thresholds[MAX_BAND]    = {200, 150,  40,  40,  80, 140, 150};
-double expander_multipliers[MAX_BAND]     = {8.0, 3.0, 6.0, 6.0, 4.0, 5.5, 6.0};
+uint16_t noise_floors[MAX_BAND] = {30, 30, 30, 30, 30, 30, 30};
 
-uint16_t compressor_thresholds[MAX_BAND]  = {700, 800, 400, 400, 1000, 900, 800};
-double compressor_ratios[MAX_BAND]        = {4.0, 2.0, 4.0, 4.0, 4.0,  3.0, 2.0};
+uint16_t expander_thresholds[MAX_BAND]    = { 50, 100,  50,  40, 120, 190, 250};
+double expander_multipliers[MAX_BAND]     = {2.5, 1.5, 3.0, 2.0, 2.0, 2.5, 3.0};
+
+uint16_t compressor_thresholds[MAX_BAND]  = {500, 700, 250, 300, 1000, 900, 800};
+double compressor_ratios[MAX_BAND]        = {4.0, 2.0, 3.0, 3.5, 4.0,  3.0, 2.0};
 double compressor_gain = 1.4;
 
 void setup() {
@@ -123,6 +125,28 @@ uint16_t compressor(uint16_t value, uint16_t threshold, double ratio, double gai
   }
 }
 
+/*
+uint16_t a[10] = {0};
+uint16_t c = 0;
+uint16_t m = 0;
+
+void loop() {
+  eq7.read();
+
+  for (int i = 0; i < MAX_BAND; i++) {
+    uint16_t raw = eq7.get(i);
+
+    // Get rid of noise floor
+    uint16_t value = newMap(constrain(raw, noise_floors[i], 1023), noise_floors[i], 1023, 0, 1023);
+
+    if (value > 0 && value < 100) {
+      sprintf(buffer, "%d: %04d", i, value);
+      Serial.println(buffer);
+    }
+  }
+}
+*/
+
 void loop() {
   bool print_pots = false;
 
@@ -136,6 +160,9 @@ void loop() {
 
     for (int i = 0; i < MAX_BAND; i++) {
       uint16_t raw = eq7.get(i);
+
+      sprintf(buffer, "%d - %04d", i, raw);
+      Serial.println(buffer);
 
       // Get rid of noise floor
       uint16_t value = newMap(constrain(raw, NOISE_FLOOR, 1023), NOISE_FLOOR, 1023, 0, 1023);
@@ -162,9 +189,9 @@ void loop() {
       // Peak compressor (Do we need this?)
       value = compressor(value, 1000, 1023, 1.0);
 
-      if (avg > 400) {
-        sprintf(buffer, "[%04d:%04d]", avg, value);
-        Serial.println(buffer);
+      if (avg != 0) {
+        sprintf(buffer, "%d [%04d:%04d]", i, avg, value);
+        //Serial.println(buffer);
       }
 
       volumes[i] = value;
