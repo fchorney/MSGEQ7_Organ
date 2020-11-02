@@ -3,7 +3,8 @@
 void MSGEQ7::begin(void) {
   pinMode(_resetPin, OUTPUT);
   pinMode(_strobePin, OUTPUT);
-  pinMode(_dataPin, INPUT);
+  pinMode(_dataLeftPin, INPUT);
+  pinMode(_dataRightPin, INPUT);
   reset();
 }
 
@@ -27,16 +28,23 @@ void MSGEQ7::read(bool bReset) {
 
     delayMicroseconds(36);
 
-    _data[i] = analogRead(_dataPin);
+    _dataLeft[i] = analogRead(_dataLeftPin);
+    _dataRight[i] = analogRead(_dataRightPin);
 
     delayMicroseconds(18);
   }
 }
 
-uint16_t MSGEQ7::get(uint8_t band) {
+uint16_t MSGEQ7::get(uint8_t side, uint8_t band) {
   if (band >= MAX_BAND) {
     return 0;
   }
 
-  return _data[band];
+  if (side == LEFT) {
+    return _dataLeft[band];
+  } else if (side == RIGHT) {
+    return _dataRight[band];
+  } else {
+    return 0;
+  }
 }

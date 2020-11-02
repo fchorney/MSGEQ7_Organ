@@ -2,39 +2,46 @@
 #include "EWM.h"
 #include "MSGEQ7.h"
 
-#define msg7RESET 13
-#define msg7Strobe 12
-#define msg7DCout 0
+#define msg7Strobe 7
+#define msg7RESET 8
+#define msg7Right A4
+#define msg7Left A5
 
 // Potentiometers
-#define pBassCutoff 1
-#define pMidCutoff 2
-#define pHighCutoff 3
+#define pBeeCutoff A0
+#define pBassCutoff A1
+#define pMidCutoff A2
+#define pHighCutoff A3
 
+EWM beePot(0.01);
 EWM bassPot(0.01);
 EWM midPot(0.01);
 EWM highPot(0.01);
 
-MSGEQ7 eq7(msg7RESET, msg7Strobe, msg7DCout);
-
-const int LEDpins[3] = {3, 5, 6};
-const int bin_size = 7;
-uint16_t bins[3];
-char buffer[256];
-
+int bee_cut_save = 0;
 int bass_cut_save = 0; // 72
 int mid_cut_save = 0; // 74
 int high_cut_save = 0; // 75
 
+MSGEQ7 eq7(msg7RESET, msg7Strobe, msg7Left, msg7Right);
+
+const int LEDpins[2][3] = {{3, 5, 6}, {11, 10, 9}};
+const int bin_size = 7;
+uint16_t bins[2][3];
+char buffer[256];
+
 #define MAX_SAMPLES 10
 #define AVG_CUT 2
-#define NOISE_FLOOR 120
+#define NOISE_FLOOR 80
 
-uint16_t volumes[MAX_BAND];
-uint16_t raw_v[MAX_BAND][MAX_SAMPLES];
+uint16_t volumes[2][MAX_BAND];
+uint16_t raw_v[2][MAX_BAND][MAX_SAMPLES];
 int sample_count = 0;
 
 // [63hz, 160Hz, 400Hz, 1kHz, 2.5kHz, 6.25kHz, 16kHz]
+// Power required in DB (lower number = louder)
+// [0, -1.3, -5.4, -8.3, -8.7, -13.9, -9.3]
+
 uint16_t noise_floors[MAX_BAND] = {30, 30, 30, 30, 30, 30, 30};
 
 uint16_t expander_thresholds[MAX_BAND]    = { 50, 100,  50,  40, 120, 190, 250};
@@ -48,28 +55,40 @@ void setup() {
   Serial.begin(250000);
   Serial.println("Setup");
 
+  // Initialize Potentiometers
+  pinMode(pBeeCutoff, INPUT);
   pinMode(pBassCutoff, INPUT);
   pinMode(pMidCutoff, INPUT);
   pinMode(pHighCutoff, INPUT);
 
-  for (int i = 0 ; i < 3 ; i++) {
-    pinMode(LEDpins[i], OUTPUT);
-    bins[i] = 0;
+  // Initialize LED Pins and Bins
+  for (int i = 0 ; i < 2 ; i++) {
+    for (int j = 0 ; j < 3 ; j++) {
+      pinMode(LEDpins[i][j], OUTPUT);
+      bins[i][j] = 0;
+    }
   }
 
-  for (int i = 0; i < MAX_BAND; i++) {
-    volumes[i] = 0;
+  // Initialize Volumes
+  for (int i = 0 ; i < 2 ; i++) {
+    for (int j = 0 ; j < MAX_BAND ; j++) {
+      volumes[i][j] = 0;
+    }
   }
 
-  clear_raw_v();
+  // Clear Raw Data
+  clear_raw();
 
+  // Initialize eq7
   eq7.begin();
 }
 
-void clear_raw_v() {
-  for (int i = 0; i < MAX_BAND ; i++) {
-    for (int j = 0; j < MAX_SAMPLES ; j++) {
-      raw_v[i][j] = 0;
+void clear_raw() {
+  for (int i = 0 ; i < 2 ; i++) {
+    for (int j = 0 ; j < MAX_BAND ; j++) {
+      for (int k = 0 ; k < MAX_SAMPLES ; k++) {
+        raw_v[i][j][k] = 0;
+      }
     }
   }
 }
@@ -77,7 +96,7 @@ void clear_raw_v() {
 void read_pot(const char *_name, EWM pot, int pin, int *save, bool _print=false) {
   int raw = pot.filter(analogRead(pin));
   int value = map(raw, 0, 1023, 0, 255);
-  if (value != *save) {
+  if (value != *save && abs(value - *save) >= 5) {
     if (_print) {
       sprintf(buffer, "%s: %d", _name, value);
       Serial.println(buffer);
@@ -125,32 +144,12 @@ uint16_t compressor(uint16_t value, uint16_t threshold, double ratio, double gai
   }
 }
 
-/*
-uint16_t a[10] = {0};
-uint16_t c = 0;
-uint16_t m = 0;
 
 void loop() {
-  eq7.read();
-
-  for (int i = 0; i < MAX_BAND; i++) {
-    uint16_t raw = eq7.get(i);
-
-    // Get rid of noise floor
-    uint16_t value = newMap(constrain(raw, noise_floors[i], 1023), noise_floors[i], 1023, 0, 1023);
-
-    if (value > 0 && value < 100) {
-      sprintf(buffer, "%d: %04d", i, value);
-      Serial.println(buffer);
-    }
-  }
-}
-*/
-
-void loop() {
-  bool print_pots = false;
+  bool print_pots = true;
 
   // Check potentiometers
+  read_pot("Bee Cut", beePot, pBeeCutoff, &bee_cut_save, print_pots);
   read_pot("Bass Cut", bassPot, pBassCutoff, &bass_cut_save, print_pots);
   read_pot("Mid Cut", midPot, pMidCutoff, &mid_cut_save, print_pots);
   read_pot("High Cut", highPot, pHighCutoff, &high_cut_save, print_pots);
@@ -158,110 +157,104 @@ void loop() {
   if (sample_count < MAX_SAMPLES) {
     eq7.read();
 
-    for (int i = 0; i < MAX_BAND; i++) {
-      uint16_t raw = eq7.get(i);
+    for (int i = 0 ; i < 2 ; i++) {
+      for (int j = 0 ; j < MAX_BAND ; j++) {
+        // Grab raw value
+        uint16_t raw = eq7.get(i, j);
 
-      sprintf(buffer, "%d - %04d", i, raw);
-      Serial.println(buffer);
+        sprintf(buffer, "RAW [%s : %02d | %04d]", i == LEFT ? " LEFT" : "RIGHT", j, raw);
+        //Serial.println(buffer);
 
-      // Get rid of noise floor
-      uint16_t value = newMap(constrain(raw, NOISE_FLOOR, 1023), NOISE_FLOOR, 1023, 0, 1023);
-
-      raw_v[i][sample_count] = value;
+        // Get rid of noise floor
+        uint16_t value = newMap(constrain(raw, NOISE_FLOOR, 1023), NOISE_FLOOR, 1023, 0, 1023);
+        raw_v[i][j][sample_count] = value;
+      }
     }
     sample_count++;
   } else {
-    for (int i = 0; i < MAX_BAND; i++) {
-      // Sort each sub array
-      isort(raw_v[i], MAX_SAMPLES);
+    for (int i = 0 ; i < 2 ; i++) {
+      for (int j = 0 ; j < MAX_BAND ; j++) {
+        // Sort each sub array
+        isort(raw_v[i][j], MAX_SAMPLES);
 
-      // Average all values but the smallest and biggest
-      uint16_t avg = 0;
-      for (int j = AVG_CUT; j < MAX_SAMPLES - AVG_CUT; j++) {
-        avg += raw_v[i][j];
-      }
-      avg = avg / (MAX_SAMPLES - (AVG_CUT * 2));
+        // Average all values but the smallest and biggest
+        uint16_t avg = 0;
+        for (int k = AVG_CUT ; k < MAX_SAMPLES - AVG_CUT ; k++) {
+          avg += raw_v[i][j][k];
+        }
+        avg = avg / (MAX_SAMPLES - (AVG_CUT * 2));
 
-      // Expand and Compress
-      uint16_t value = expander(avg, expander_thresholds[i], expander_multipliers[i]);
-      value = compressor(value, compressor_thresholds[i], compressor_ratios[i], compressor_gain);
+        uint16_t value = avg;
 
-      // Peak compressor (Do we need this?)
-      value = compressor(value, 1000, 1023, 1.0);
+        // Expand and Compress
+        //uint16_t value = expander(avg, expander_thresholds[i], expander_multipliers[i]);
+        //value = compressor(value, compressor_thresholds[i], compressor_ratios[i], compressor_gain);
 
-      if (avg != 0) {
-        sprintf(buffer, "%d [%04d:%04d]", i, avg, value);
+        // Peak compressor (Do we need this?)
+        // value = compressor(value, 1000, 1023, 1.0);
+
+        sprintf(buffer, "AVG [%s : %02d | %04d]", i == LEFT ? " LEFT" : "RIGHT", j, value);
         //Serial.println(buffer);
-      }
-
-      volumes[i] = value;
-    }
-
-    for (int i = 0; i < MAX_BAND; i++) {
-      uint16_t value = volumes[i];
-
-      // We want to split the 7 bands into 3 bins
-      // 0 -> 63hz + 160Hz
-      // 1 -> 400Hz + 1kHz
-      // 2 -> 2.5kHz + 6.25kHz + 16kHz
-      if (i == 0 || i == 1) {
-        bins[0] += value;
-      } else if (i == 2 || i == 3) {
-        bins[1] += value;
-      } else {
-        bins[2] += value;
+        volumes[i][j] = value;
       }
     }
 
-  /*
-  sprintf(
-    buffer,
-    "Raw [%04d : %04d : %04d : %04d : %04d : %04d : %04d]",
-    raw_v[0], raw_v[1], raw_v[2], raw_v[3], raw_v[4], raw_v[5], raw_v[6]
-  );
-  Serial.println(buffer);
-  sprintf(
-    buffer,
-    "Map [%04d : %04d : %04d : %04d : %04d : %04d : %04d]",
-    volumes[0], volumes[1], volumes[2], volumes[3], volumes[4], volumes[5], volumes[6]
-  );
-  Serial.println(buffer);
-  */
+    for (int i = 0 ; i < 2 ; i++) {
+      for (int j = 0 ; j < MAX_BAND ; j++) {
+        uint16_t value = volumes[i][j];
 
-    for (int x = 0 ; x < 3 ; x++) {
-      uint16_t value = 0;
-
-      if (x == 0 || x == 1) {
-        value = bins[x] / 2;
-      } else {
-        value = bins[x] / 3;
+        // We want to split the 7 bands into 3 bins
+        // 0 -> 63hz + 160Hz
+        // 1 -> 400Hz + 1kHz
+        // 2 -> 2.5kHz + 6.25kHz + 16kHz
+        if (j == 0 || j == 1)
+          bins[i][0] += value;
+        else if (j == 2 || j == 3)
+          bins[i][1] += value;
+        else
+          bins[i][2] += value;
       }
-      bins[x] = 0;
-
-      // turn into volume
-      uint16_t vol = uint16_t(20.0 * log10((double)value));
-      //sprintf(buffer, "[Value : Vol] - [%04d : %04d]", value, vol);
-      //Serial.println(buffer);
-
-      //int PWMValue = map(value, 0, 1023, 0, 255);
-      int PWMValue = map(vol, 0, 60, 0, 255);
-      if (
-          (x == 0 && PWMValue < bass_cut_save) ||
-          (x == 1 && PWMValue < mid_cut_save) ||
-          (x == 2 && PWMValue < high_cut_save)
-      ) {
-        PWMValue = 0;
-      }
-
-      int output_val = constrain(PWMValue, 0, 255);
-
-      sprintf(buffer, "[Vol : PWM] - [%04d : %04d]", vol, output_val);
-      //Serial.println(buffer);
-
-      analogWrite(LEDpins[x], output_val);
     }
 
-    clear_raw_v();
+    // Average out the bins and find the highest bin
+    uint16_t highest[2] = {0, 0};
+    for (int i = 0 ; i < 2 ; i++) {
+      for (int j = 0 ; j < 3 ; j++) {
+        if (j == 0 || j == 1)
+          bins[i][j] = bins[i][j] / 2;
+        else
+          bins[i][j] = bins[i][j] / 3;
+
+        // Do we want to normalize over both left and right, or individually?
+        if (bins[i][j] > highest[i])
+          highest[i] = bins[i][j];
+      }
+    }
+
+    // Find the normalized multiplier
+    double normalizer[2] = {0, 0};
+    for (int i = 0 ; i < 2 ; i++)
+      normalizer[i] = 1023 / highest[i];
+
+
+    for (int i = 0 ; i < 2 ; i++) {
+      for (int j = 0 ; j < 3 ; j++) {
+        uint16_t value = bins[i][j] * normalizer[i];
+        bins[i][j] = 0;
+
+        // Turn into volume
+        uint16_t vol = uint16_t(20.0 * log10((double)value));
+        int PWMValue = map(vol, 0, 60, 0, 255);
+        int output_val = constrain(PWMValue, 0, 255);
+
+        sprintf(buffer,"[ %02d | %02d | %02d | %03d ]", i, j, LEDpins[i][j], output_val);
+        Serial.println(buffer);
+
+        analogWrite(LEDpins[i][j], output_val);
+      }
+    }
+
+    clear_raw();
     sample_count = 0;
   }
 }
